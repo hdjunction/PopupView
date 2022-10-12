@@ -35,10 +35,37 @@ extension View {
     }
 }
 
+extension View {
+    @ViewBuilder
+    func applyIf<T: View>(_ condition: Bool, apply: (Self) -> T) -> some View {
+        if condition {
+            apply(self)
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func addTapIfNotTV(if condition: Bool, onTap: @escaping ()->()) -> some View {
+        #if os(tvOS)
+        self
+        #else
+        if condition {
+            self.simultaneousGesture(
+                TapGesture().onEnded {
+                    onTap()
+                }
+            )
+        } else {
+            self
+        }
+        #endif
+    }
+}
+
 struct FrameGetter: ViewModifier {
 
     @Binding var frame: CGRect
-    @Binding var safeArea: EdgeInsets
 
     func body(content: Content) -> some View {
         content
@@ -48,7 +75,6 @@ struct FrameGetter: ViewModifier {
                     // This avoids an infinite layout loop
                     if rect.integral != self.frame.integral {
                         DispatchQueue.main.async {
-                            self.safeArea = proxy.safeAreaInsets
                             self.frame = rect
                         }
                     }
@@ -59,8 +85,8 @@ struct FrameGetter: ViewModifier {
 }
 
 extension View {
-    public func frameGetter(_ frame: Binding<CGRect>, _ safeArea: Binding<EdgeInsets>) -> some View {
-        modifier(FrameGetter(frame: frame, safeArea: safeArea))
+    public func frameGetter(_ frame: Binding<CGRect>) -> some View {
+        modifier(FrameGetter(frame: frame))
     }
 }
 
@@ -113,3 +139,54 @@ extension View {
         return modifier(AnimationCompletionObserverModifier(observedValue: value, completion: completion))
     }
 }
+
+#if os(iOS)
+
+extension UIApplication {
+    var keyWindow: UIWindow? {
+        connectedScenes
+            .compactMap {
+                $0 as? UIWindowScene
+            }
+            .flatMap {
+                $0.windows
+            }
+            .first {
+                $0.isKeyWindow
+            }
+    }
+}
+
+private struct SafeAreaInsetsKey: EnvironmentKey {
+    static var defaultValue: EdgeInsets {
+        UIApplication.shared.keyWindow?.safeAreaInsets.swiftUiInsets ?? EdgeInsets()
+    }
+}
+
+extension EnvironmentValues {
+    var safeAreaInsets: EdgeInsets {
+        self[SafeAreaInsetsKey.self]
+    }
+}
+
+private extension UIEdgeInsets {
+    var swiftUiInsets: EdgeInsets {
+        EdgeInsets(top: top, leading: left, bottom: bottom, trailing: right)
+    }
+}
+
+#else
+
+private struct SafeAreaInsetsKey: EnvironmentKey {
+    static var defaultValue: EdgeInsets {
+        EdgeInsets()
+    }
+}
+
+extension EnvironmentValues {
+    var safeAreaInsets: EdgeInsets {
+        self[SafeAreaInsetsKey.self]
+    }
+}
+
+#endif

@@ -8,89 +8,12 @@
 
 import SwiftUI
 
-extension View {
-
-    public func popup<Item: Equatable, PopupContent: View>(
-        item: Binding<Item?>,
-        type: Popup<Item, PopupContent>.PopupType = .`default`,
-        position: Popup<Item, PopupContent>.Position = .bottom,
-        animation: Animation = Animation.easeOut(duration: 0.3),
-        autohideIn: Double? = nil,
-        dragToDismiss: Bool = true,
-        closeOnTap: Bool = true,
-        closeOnTapOutside: Bool = false,
-        backgroundColor: Color = Color.clear,
-        dismissCallback: @escaping () -> () = {},
-        @ViewBuilder view: @escaping () -> PopupContent) -> some View {
-            self.modifier(
-                Popup(
-                    item: item,
-                    type: type,
-                    position: position,
-                    animation: animation,
-                    autohideIn: autohideIn,
-                    dragToDismiss: dragToDismiss,
-                    closeOnTap: closeOnTap,
-                    closeOnTapOutside: closeOnTapOutside,
-                    backgroundColor: backgroundColor,
-                    dismissCallback: dismissCallback,
-                    view: view)
-            )
-        }
-
-    public func popup<PopupContent: View>(
-        isPresented: Binding<Bool>,
-        type: Popup<Int, PopupContent>.PopupType = .`default`,
-        position: Popup<Int, PopupContent>.Position = .bottom,
-        animation: Animation = Animation.easeOut(duration: 0.3),
-        autohideIn: Double? = nil,
-        dragToDismiss: Bool = true,
-        closeOnTap: Bool = true,
-        closeOnTapOutside: Bool = false,
-        backgroundColor: Color = Color.clear,
-        dismissCallback: @escaping () -> () = {},
-        @ViewBuilder view: @escaping () -> PopupContent) -> some View {
-        self.modifier(
-            Popup<Int, PopupContent>(
-                isPresented: isPresented,
-                type: type,
-                position: position,
-                animation: animation,
-                autohideIn: autohideIn,
-                dragToDismiss: dragToDismiss,
-                closeOnTap: closeOnTap,
-                closeOnTapOutside: closeOnTapOutside,
-                backgroundColor: backgroundColor,
-                dismissCallback: dismissCallback,
-                view: view)
-        )
-    }
-
-    @ViewBuilder
-    func applyIf<T: View>(_ condition: Bool, apply: (Self) -> T) -> some View {
-        if condition {
-            apply(self)
-        } else {
-            self
-        }
-    }
-
-    @ViewBuilder
-    fileprivate func addTapIfNotTV(if condition: Bool, onTap: @escaping ()->()) -> some View {
-        #if os(tvOS)
-        self
-        #else
-        if condition {
-            self.simultaneousGesture(
-                TapGesture().onEnded {
-                    onTap()
-                }
-            )
-        } else {
-            self
-        }
-        #endif
-    }
+public enum DismissSource {
+    case binding // set isPresented to false ot item to nil
+    case tapInside
+    case tapOutside
+    case drag
+    case autohide
 }
 
 public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
@@ -104,7 +27,7 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
          closeOnTap: Bool,
          closeOnTapOutside: Bool,
          backgroundColor: Color,
-         dismissCallback: @escaping () -> (),
+         dismissCallback: @escaping (DismissSource) -> (),
          view: @escaping () -> PopupContent) {
         self._isPresented = isPresented
         self._item = .constant(nil)
@@ -131,7 +54,7 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
          closeOnTap: Bool,
          closeOnTapOutside: Bool,
          backgroundColor: Color,
-         dismissCallback: @escaping () -> (),
+         dismissCallback: @escaping (DismissSource) -> (),
          view: @escaping () -> PopupContent) {
         self._isPresented = .constant(false)
         self._item = item
@@ -224,7 +147,7 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
     var backgroundColor: Color
 
     /// is called on any close action
-    var dismissCallback: () -> ()
+    var dismissCallback: (DismissSource) -> ()
 
     var view: () -> PopupContent
 
@@ -232,6 +155,8 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
     var dispatchWorkHolder = DispatchWorkHolder()
 
     // MARK: - Private Properties
+
+    @Environment(\.safeAreaInsets) private var safeAreaInsets
     
     /// Class reference for capturing a weak reference later in dispatch work holder.
     private var isPresentedRef: ClassReference<Binding<Bool>>?
@@ -239,11 +164,9 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
 
     /// The rect and safe area of the hosting controller
     @State private var presenterContentRect: CGRect = .zero
-    @State private var presenterSafeArea: EdgeInsets = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
 
     /// The rect and safe area of popup content
     @State private var sheetContentRect: CGRect = .zero
-    @State private var sheetSafeArea: EdgeInsets = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
 
     /// Drag to dismiss gesture state
     @GestureState private var dragState = DragState.inactive
@@ -256,6 +179,9 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
     
     /// ... once hiding animation is finished remove popup from the memory using this flag
     @State private var showContent: Bool = false
+
+    /// Set dismiss souce to pass to dismiss callback
+    @State private var dismissSource: DismissSource?
     
     /// The offset when the popup is displayed
     private var displayedOffset: CGFloat {
@@ -264,15 +190,15 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
             return -presenterContentRect.midY + screenHeight/2
         case .toast:
             if position == .bottom {
-                return presenterContentRect.minY + presenterSafeArea.bottom + presenterContentRect.height - presenterContentRect.midY - sheetContentRect.height/2
+                return presenterContentRect.minY + safeAreaInsets.bottom + presenterContentRect.height - presenterContentRect.midY - sheetContentRect.height/2
             } else {
-                return presenterContentRect.minY - presenterSafeArea.top - presenterContentRect.midY + sheetContentRect.height/2
+                return presenterContentRect.minY - safeAreaInsets.top - presenterContentRect.midY + sheetContentRect.height/2
             }
         case .floater(let verticalPadding, let useSafeAreaInset):
             if position == .bottom {
-                return presenterContentRect.minY + presenterSafeArea.bottom + presenterContentRect.height - presenterContentRect.midY - sheetContentRect.height/2 - verticalPadding + (useSafeAreaInset ? -presenterSafeArea.bottom : 0)
+                return presenterContentRect.minY + safeAreaInsets.bottom + presenterContentRect.height - presenterContentRect.midY - sheetContentRect.height/2 - verticalPadding + (useSafeAreaInset ? -safeAreaInsets.bottom : 0)
             } else {
-                return presenterContentRect.minY - presenterSafeArea.top - presenterContentRect.midY + sheetContentRect.height/2 + verticalPadding + (useSafeAreaInset ? presenterSafeArea.top : 0)
+                return presenterContentRect.minY - safeAreaInsets.top - presenterContentRect.midY + sheetContentRect.height/2 + verticalPadding + (useSafeAreaInset ? safeAreaInsets.top : 0)
             }
         }
     }
@@ -325,16 +251,28 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
             }
             .valueChanged(value: isPresented) { isPresented in
                 appearAction(sheetPresented: isPresented)
+                if isPresented {
+                    dismissSource = .binding
+                }
+                if !isPresented {
+                    dismissCallback(dismissSource ?? .autohide)
+                }
             }
             .valueChanged(value: item) { item in
                 appearAction(sheetPresented: item != nil)
+                if item != nil {
+                    dismissSource = .binding
+                }
+                if item == nil {
+                    dismissCallback(dismissSource ?? .autohide)
+                }
             }
     }
 
     private func main(content: Content) -> some View {
         ZStack {
             content
-                .frameGetter($presenterContentRect, $presenterSafeArea)
+                .frameGetter($presenterContentRect)
 
             if showContent {
                 popupBackground()
@@ -355,11 +293,12 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
                 view.contentShape(Rectangle())
             }
             .addTapIfNotTV(if: closeOnTapOutside) {
+                dismissSource = .tapOutside
                 dismiss()
             }
             .edgesIgnoringSafeArea(.all)
             .opacity(currentBackgroundOpacity)
-	    .animation(.linear)
+            .animation(.linear)
     }
 
     /// This is the builder for the sheet content
@@ -372,11 +311,10 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
             // Weak reference to avoid the work item capturing the struct,
             // which would create a retain cycle with the work holder itself.
 			
-            let block = dismissCallback
             dispatchWorkHolder.work = DispatchWorkItem(block: { [weak isPresentedRef, weak itemRef] in
                 isPresentedRef?.value.wrappedValue = false
                 itemRef?.value.wrappedValue = nil
-                block()
+                dismissSource = .autohide
             })
             if sheetPresented, let work = dispatchWorkHolder.work {
                 DispatchQueue.main.asyncAfter(deadline: .now() + autohideIn, execute: work)
@@ -386,9 +324,10 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
         let sheet = ZStack {
             self.view()
                 .addTapIfNotTV(if: closeOnTap) {
+                    dismissSource = .tapInside
                     dismiss()
                 }
-                .frameGetter($sheetContentRect, $sheetSafeArea)
+                .frameGetter($sheetContentRect)
                 .offset(y: currentOffset)
                 .onAnimationCompleted(for: currentOffset) {
                     showContent = shouldShowContent
@@ -430,6 +369,7 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
             withAnimation {
                 lastDragPosition = 0
             }
+            dismissSource = .drag
             dismiss()
         }
     }
@@ -451,6 +391,5 @@ public struct Popup<Item: Equatable, PopupContent: View>: ViewModifier {
         dispatchWorkHolder.work?.cancel()
         isPresented = false
         item = nil
-        dismissCallback()
     }
 }
